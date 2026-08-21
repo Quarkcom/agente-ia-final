@@ -1,4 +1,4 @@
-import os
+mport os
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -385,12 +385,29 @@ Cuando el usuario solicite el gráfico de RTP acumulado:
 
     GPD_MA30 = media móvil de GPD diario de 30 períodos.
 
-    La presencia de un día sin juego con GPD = 0 no debe interrumpir
+    Usar una ventana estricta de 30 períodos:
+
+    rolling(window=30, min_periods=30)
+
+    Los primeros 29 registros deben quedar sin valor de GPD_MA30,
+    porque todavía no existen 30 períodos completos.
+
+    El primer valor válido de GPD_MA30 debe aparecer en el registro 30.
+
+    La presencia de un día sin juego válido con GPD = 0 no debe interrumpir
     la curva de media móvil.
 
-    Para el Excel final, GPD_MA30 debe mostrarse redondeado como entero.
+    Para el Excel final:
+
+    - conservar una única columna llamada exactamente GPD_MA30;
+    - no crear una columna auxiliar llamada GPD_MA30_INT;
+    - mostrar GPD_MA30 redondeado como número entero;
+    - mantener vacíos los primeros 29 registros;
+    - desde el registro 30 en adelante, mostrar el valor de GPD_MA30;
+    - eliminar cualquier columna cuyo nombre comience con "Unnamed:".
 
     La curva debe ser:
+
     - color negro;
     - grosor aproximado 2.5 pt;
     - línea segmentada o discontinua;
@@ -584,7 +601,23 @@ def descargar_archivos_generados(openai_client, response):
     if not hasattr(response, "output") or not response.output:
         return archivos_descargados
 
+    carpeta_salida = Path(__file__).resolve().parent
+
+    citas = []
+    container_ids = set()
+
+    # -------------------------------------------------
+    # 1. Buscar citas estructuradas de archivos
+    # -------------------------------------------------
     for item in response.output:
+
+        # Guardar también el container_id de Code Interpreter
+        if getattr(item, "type", "") == "code_interpreter_call":
+            container_id = getattr(item, "container_id", None)
+
+            if container_id:
+                container_ids.add(container_id)
+
         if getattr(item, "type", "") != "message":
             continue
 
@@ -592,27 +625,166 @@ def descargar_archivos_generados(openai_client, response):
             annotations = getattr(content_item, "annotations", []) or []
 
             for annotation in annotations:
-                annotation_type = getattr(annotation, "type", "")
 
-                if annotation_type == "container_file_citation":
-                    file_id = annotation.file_id
-                    container_id = annotation.container_id
-                    filename = getattr(annotation, "filename", f"{file_id}.bin")
+                if getattr(annotation, "type", "") == "container_file_citation":
 
-                    clave = (container_id, file_id)
-                    if clave in vistos:
-                        continue
-                    vistos.add(clave)
+                    citas.append(annotation)
 
-                    file_content = openai_client.containers.files.content.retrieve(
+                    container_id = getattr(annotation, "container_id", None)
+
+                    if container_id:
+                        container_ids.add(container_id)
+
+    print(f"\nCitas de archivos detectadas: {len(citas)}")
+
+    # -------------------------------------------------
+    # 2. Descargar archivos que sí llegaron como cita
+    # -------------------------------------------------
+    nombres_reales = {
+        getattr(c, "filename", "")
+        for c in citas
+        if getattr(c, "filename", "")
+        and not getattr(c, "filename", "").startswith("cfile_")
+    }
+
+    for annotation in citas:
+
+        file_id = annotation.file_id
+        container_id = annotation.container_id
+        filename = getattr(
+            annotation,
+            "filename",
+            f"{file_id}.bin"
+        )
+
+        # Evitar PNG auxiliar automático cfile_...
+        if filename.startswith("cfile_"):
+
+            extension = Path(filename).suffix.lower()
+
+            existe_archivo_real = any(
+                Path(nombre).suffix.lower() == extension
+                for nombre in nombres_reales
+            )
+
+            if existe_archivo_real:
+                print(f"Omitiendo archivo auxiliar: {filename}")
+                continue
+
+        clave = (container_id, file_id)
+
+        if clave in vistos:
+            continue
+
+        vistos.add(clave)
+
+        file_content = (
+            openai_client
+            .containers
+            .files
+            .content
+            .retrieve(
+                file_id=file_id,
+                container_id=container_id,
+            )
+        )
+
+        ruta_salida = carpeta_salida / filename
+
+        with open(ruta_salida, "wb") as f:
+            f.write(file_content.read())
+
+        archivos_descargados.append(str(ruta_salida))
+
+    # -------------------------------------------------
+    # 3. Revisar directamente los archivos del contenedor
+    # -------------------------------------------------
+    for container_id in container_ids:
+
+        try:
+            archivos_container = openai_client.containers.files.list(
+                container_id=container_id
+            )
+
+        except Exception as e:
+            print(
+                f"No se pudo listar el contenedor "
+                f"{container_id}: {e}"
+            )
+            continue
+
+        for archivo in getattr(archivos_container, "data", []):
+
+            file_id = getattr(archivo, "id", None)
+
+            filename = (
+                getattr(archivo, "filename", None)
+                or getattr(archivo, "name", None)
+            )
+
+            if not file_id or not filename:
+                continue
+
+            # No descargar el Excel original de entrada
+            if file_id.startswith("assistant-"):
+                continue
+
+            # Nos interesan los archivos de salida
+            extension = Path(filename).suffix.lower()
+
+            if extension not in {".png", ".xlsx"}:
+                continue
+
+            # Evitar auxiliares cfile_ si ya hay PNG real
+            if filename.startswith("cfile_"):
+
+                existe_png_real = any(
+                    Path(a).suffix.lower() == ".png"
+                    and not Path(a).name.startswith("cfile_")
+                    for a in archivos_descargados
+                )
+
+                if existe_png_real:
+                    continue
+
+            clave = (container_id, file_id)
+
+            if clave in vistos:
+                continue
+
+            vistos.add(clave)
+
+            try:
+                file_content = (
+                    openai_client
+                    .containers
+                    .files
+                    .content
+                    .retrieve(
                         file_id=file_id,
                         container_id=container_id,
                     )
+                )
 
-                    with open(filename, "wb") as f:
-                        f.write(file_content.read())
+                ruta_salida = carpeta_salida / filename
 
-                    archivos_descargados.append(filename)
+                with open(ruta_salida, "wb") as f:
+                    f.write(file_content.read())
+
+                archivos_descargados.append(
+                    str(ruta_salida)
+                )
+
+                print(
+                    f"Archivo recuperado directamente "
+                    f"del contenedor: {filename}"
+                )
+
+            except Exception as e:
+                print(
+                    f"No se pudo descargar "
+                    f"{filename}: {e}"
+                )
 
     return archivos_descargados
 
@@ -710,7 +882,6 @@ def main():
 
         print("\n=== RESPUESTA DEL AGENTE ===")
         print(response.output_text)
-
         # 6) Descargar archivos generados
         archivos = descargar_archivos_generados(openai_client, response)
         if archivos:
