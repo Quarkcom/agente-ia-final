@@ -370,3 +370,14 @@ El proyecto demuestra que un agente de IA puede combinar lenguaje natural con Py
 
 El agente no solo calcula KPI, sino que también valida la calidad de la información, distingue entre días sin juego y errores reales de datos, genera visualizaciones y produce archivos procesados para análisis posterior.
 
+## Repositorio del proyecto
+
+Repositorio GitHub:
+https://github.com/Quarkcom/agente-ia-final
+
+
+## Video de demostración
+
+Video de presentación y demostración del proyecto:
+https://we.tl/t-oGWUVVz7Q0gsAPqp
+
