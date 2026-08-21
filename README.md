@@ -375,6 +375,9 @@ El agente no solo calcula KPI, sino que también valida la calidad de la informa
 Repositorio GitHub:
 https://github.com/Quarkcom/agente-ia-final
 
+ACTUALIZACION
+El agente ya descarga correctamente los archivos generados y que GPD_MA30 usa ventana estricta de 30 períodos
+
 
 ## Video de demostración
 
